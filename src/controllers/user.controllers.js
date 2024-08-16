@@ -4,6 +4,7 @@ import { User } from "../models/users.models.js";
 import { uploadOnCloudinary } from "../utils/cloudinary.js";
 import { apiResponse } from "../utils/apiResponse.js";
 import jwt from "jsonwebtoken";
+import mongoose from "mongoose";
 
 const generateAccessAndRefereshTokens = async (userId) => {
   try {
@@ -163,8 +164,13 @@ const logoutUser = asyncHandler(async (req, res, next) => {
   await User.findByIdAndUpdate(
     req.user._id,
     {
-      $set: {
-        refreshToken: null,
+      // $set: {
+      //   refreshToken: null,
+      // },
+
+      $unset: {
+        //alt away
+        refreshToken: 1,
       },
     },
     {
@@ -304,6 +310,126 @@ const fileUpdate = asyncHandler(async (req, res, next) => {
     .json(new apiResponse(200, user, "Avatar updated successfully"));
 });
 
+const getUserChannelProfile = asyncHandler(async (req, res, next) => {
+  const { username } = req.params;
+  if (!username) {
+    throw new apiError(400, "Username is required");
+  }
+  const channel = await User.aggregate([
+    //match users
+    {
+      $match: {
+        username: username,
+      },
+    },
+    //lookup for subscribers
+    {
+      $lookup: {
+        from: "subscriptions",
+        localField: "_id",
+        foreignField: "channel",
+        as: "subscribers",
+      },
+    },
+    //lookup for subscriptions
+    {
+      $lookup: {
+        from: "subscriptions",
+        localField: "_id",
+        foreignField: "subscriber",
+        as: "subscribedTo",
+      },
+    },
+    //count subscribers and subscriptions and check if user is subscribed
+    {
+      $addFields: {
+        subscribersCount: { $size: "$subscribers" },
+        channelIsSubscribesTo: { $size: "$subscribedTo" },
+        isSubscribed: {
+          if: { $in: [req.user._id, "$subscribers.subscriber"] },
+          then: true,
+          else: false,
+        },
+      },
+    },
+    //data u want to senmd to frointend
+    {
+      $project: {
+        fullName: 1,
+        username: 1,
+        subscribersCount: 1,
+        channelIsSubscribesTo: 1,
+        avatar: 1,
+        coverImage: 1,
+        email: 1,
+        createdAt: 1,
+      },
+    },
+  ]);
+  console.log("channel: ", channel);
+  if (channel.length === 0) {
+    throw new apiError(404, "User not found");
+  }
+
+  return res
+    .status(200)
+    .json(new apiResponse(200, channel[0], "Channel fetched successfully"));
+});
+
+const getWatchHistory = asyncHandler(async (req, res, next) => {
+  const user = await User.aggregate([
+    {
+      $match: {
+        _id: new mongoose.Types.ObjectId(req.user._id),
+      },
+    },
+    {
+      $lookup: {
+        from: "videos",
+        localField: "watchHistory",
+        foreignField: "_id",
+        as: "watchHistory",
+        pipeline: [
+          {
+            $lookup: {
+              from: "users",
+              localField: "owner",
+              foreignField: "_id",
+              as: "owner",
+              pipeline: [
+                {
+                  $project: {
+                    fullName: 1,
+                    username: 1,
+                    avatar,
+                  },
+                },
+              ],
+            },
+          },
+          {
+            $addFields: {
+              owner: {
+                $first: "$owner",
+              },
+            },
+          },
+        ],
+      },
+    },
+  ]);
+
+  return res
+    .status(200)
+    .json(
+      new apiResponse(
+        200,
+        user[0].watchHistory,
+        "Watch history fetched successfully"
+      )
+    );
+});
+
 export {
   registerUser,
   loginUser,
@@ -313,4 +439,6 @@ export {
   getCurentUser,
   updateAccountDetails,
   fileUpdate,
+  getUserChannelProfile,
+  getWatchHistory,
 };
